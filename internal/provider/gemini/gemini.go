@@ -46,15 +46,46 @@ func (p *Provider) IsAvailable() bool {
 	return err == nil && st.IsDir()
 }
 
+// geminiContentPart is one part of a Gemini message content array.
+type geminiContentPart struct {
+	Text string `json:"text"`
+}
+
 // geminiRecord is one line of a Gemini JSONL session file.
 type geminiRecord struct {
-	Type      string          `json:"type"`
-	SessionID string          `json:"sessionId"`
-	StartTime string          `json:"startTime"`
-	LastUpdated string        `json:"lastUpdated"`
-	Content   string          `json:"content"`
-	Timestamp string          `json:"timestamp"`
-	Payload   json.RawMessage `json:"payload"`
+	Type       string          `json:"type"`
+	SessionID  string          `json:"sessionId"`
+	StartTime  string          `json:"startTime"`
+	LastUpdated string         `json:"lastUpdated"`
+	Content    json.RawMessage `json:"content"`
+	Timestamp  string          `json:"timestamp"`
+	Payload    json.RawMessage `json:"payload"`
+}
+
+// extractText pulls readable text out of a content field, which may be a
+// plain string or an array of {text: "..."} parts (as the real Gemini CLI
+// writes).
+func extractText(content json.RawMessage) string {
+	if len(content) == 0 {
+		return ""
+	}
+	var parts []geminiContentPart
+	if err := json.Unmarshal(content, &parts); err == nil {
+		var texts []string
+		for _, part := range parts {
+			if t := strings.TrimSpace(part.Text); t != "" {
+				texts = append(texts, t)
+			}
+		}
+		if len(texts) > 0 {
+			return strings.Join(texts, "\n")
+		}
+	}
+	var s string
+	if err := json.Unmarshal(content, &s); err == nil {
+		return strings.TrimSpace(s)
+	}
+	return ""
 }
 
 // parseJSONL parses one Gemini JSONL session file. Returns nil if the file
@@ -85,11 +116,14 @@ func (p *Provider) parseJSONL(path string) *session.Session {
 		if r.LastUpdated != "" {
 			lastUpdated = r.LastUpdated
 		}
-		if r.Type == "user" && strings.TrimSpace(r.Content) != "" {
-			prompts = append(prompts, session.Prompt{
-				TS:   r.Timestamp,
-				Text: strings.TrimSpace(r.Content),
-			})
+		if r.Type == "user" {
+			text := extractText(r.Content)
+			if text != "" {
+				prompts = append(prompts, session.Prompt{
+					TS:   r.Timestamp,
+					Text: text,
+				})
+			}
 		}
 	}
 
